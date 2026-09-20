@@ -103,34 +103,71 @@ class Interpolator1DPCP(Interpolator1D):
     def __init__(self, axis1: np.ndarray, values: np.ndarray,
                  extrapolation_method: ExtrapMethod) -> None:
         super().__init__(axis1, values,
-                         InterpMethod.PIECEWISE_CONSTANT_LEFT_CONTINUOUS,
-                         extrapolation_method)
+                          InterpMethod.PIECEWISE_CONSTANT_LEFT_CONTINUOUS,
+                          extrapolation_method)
         assert self.extrap_method_ == ExtrapMethod.FLAT
 
-    def interpolate(self, x: float) -> float:
-        #TODO
-        pass
+    def _bucket_index(self, x: float) -> int:
+        """Index i such that f(x) = values[i], per the convention above."""
+        idx = np.searchsorted(self.axis1_, x, side='left')
+        return min(idx, self.length_ - 1)
 
-    def integrate(self, start_x: float, end_x: float) -> float:
-        #TODO
-        pass
+    def interpolate(self, x: float) -> float:
+        return float(self.values_[self._bucket_index(x)])
 
     def gradient_wrt_ordinate(self, x: float) -> np.ndarray:
-        #TODO
-        pass
+        grad = np.zeros(self.length_)
+        grad[self._bucket_index(x)] = 1.0
+        return grad
+
+    def _segment_overlaps(self, start_x: float, end_x: float) -> np.ndarray:
+        """Length of overlap between [l, u] (l <= u) and each constant-value
+        region: (-inf, x_0], (x_0, x_1], ..., (x_{N-2}, x_{N-1}], (x_{N-1}, +inf).
+        The first and last regions share values[0] / values[-1] respectively
+        with flat extrapolation, so this returns exactly `length_` overlaps,
+        one per node/value.
+        """
+        x = self.axis1_
+        n = self.length_
+        overlaps = np.zeros(n)
+
+        # left wing: (-inf, x_0], attributed to values[0]
+        lo, hi = start_x, min(end_x, x[0])
+        if hi > lo:
+            overlaps[0] += hi - lo
+
+        # interior buckets: (x_{i-1}, x_i], attributed to values[i]
+        for i in range(1, n):
+            lo, hi = max(start_x, x[i - 1]), min(end_x, x[i])
+            if hi > lo:
+                overlaps[i] += hi - lo
+
+        # right wing: (x_{N-1}, +inf), attributed to values[-1]
+        lo, hi = max(start_x, x[-1]), end_x
+        if hi > lo:
+            overlaps[-1] += hi - lo
+
+        return overlaps
+
+    def integrate(self, start_x: float, end_x: float) -> float:
+        if start_x > end_x:
+            return -self.integrate(end_x, start_x)
+        overlaps = self._segment_overlaps(start_x, end_x)
+        return float(np.dot(overlaps, self.values_))
 
     def gradient_of_integrated_value_wrt_ordinate(self, start_x: float, end_x: float) -> np.ndarray:
-        #TODO
-        pass
+        if start_x > end_x:
+            return -self.gradient_of_integrated_value_wrt_ordinate(end_x, start_x)
+        return self._segment_overlaps(start_x, end_x)
 
 
 class InterpolatorFactory:
 
     @staticmethod
     def create_1d_interpolator(axis1: np.ndarray | List,
-                               values: np.ndarray | List,
-                               interpolation_method: InterpMethod,
-                               extrapolation_method: ExtrapMethod):
+                                values: np.ndarray | List,
+                                interpolation_method: InterpMethod,
+                                extrapolation_method: ExtrapMethod):
 
         axis1_ = copy.deepcopy(axis1)
         values_ = copy.deepcopy(values)
